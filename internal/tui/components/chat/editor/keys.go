@@ -34,7 +34,7 @@ func DefaultEditorKeyMap() EditorKeyMap {
 			key.WithHelp("ctrl+j", "newline"),
 		),
 		SelectAll: key.NewBinding(
-			key.WithKeys("ctrl+a"),
+			key.WithKeys("ctrl+a", "cmd+a"),
 			key.WithHelp("ctrl+a", "select all"),
 		),
 	}
