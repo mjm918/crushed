@@ -62,6 +62,7 @@ type editorCmp struct {
 	deleteMode         bool
 	readyPlaceholder   string
 	workingPlaceholder string
+	allSelected        bool // Track if all text is selected
 
 	keyMap EditorKeyMap
 
@@ -189,11 +190,17 @@ func (m *editorCmp) Update(msg tea.Msg) (util.Model, tea.Cmd) {
 		}
 		if item, ok := msg.Value.(FileCompletionItem); ok {
 			word := m.textarea.Word()
-			// If the selected item is a file, insert its path into the textarea
+			// If the selected item is a file, insert its path into the textarea.
 			value := m.textarea.Value()
-			value = value[:m.completionsStartIndex] + // Remove the current query
-				item.Path + // Insert the file path
-				value[m.completionsStartIndex+len(word):] // Append the rest of the value
+
+			// Convert byte indices to grapheme indices.
+			_, graphemeEnd := ansi.ByteToGraphemeRange(value, m.completionsStartIndex+len(word), m.completionsStartIndex+len(word))
+
+			// Rebuild with the file path inserted.
+			value = value[:m.completionsStartIndex] + // remove the current query
+				item.Path + // insert the file path
+				ansi.Cut(value, graphemeEnd, ansi.StringWidth(value)) // append the rest of the value
+
 			// XXX: This will always move the cursor to the end of the textarea.
 			m.textarea.SetValue(value)
 			m.textarea.MoveToEnd()
@@ -302,22 +309,50 @@ func (m *editorCmp) Update(msg tea.Msg) (util.Model, tea.Cmd) {
 			}
 			return m, m.openEditor(m.textarea.Value())
 		}
+		if key.Matches(msg, m.keyMap.SelectAll) {
+			// Select all text in the textarea
+			if m.textarea.Value() != "" {
+				m.allSelected = true
+			}
+			return m, nil
+		}
 		if key.Matches(msg, DeleteKeyMaps.Escape) {
 			m.deleteMode = false
+			m.allSelected = false // Deselect on escape
 			return m, nil
 		}
 		if key.Matches(msg, m.keyMap.Newline) {
 			m.textarea.InsertRune('\n')
+			m.allSelected = false // Deselect after typing
 			cmds = append(cmds, util.CmdHandler(completions.CloseCompletionsMsg{}))
+		}
+		// Handle text operations for selected text
+		if m.allSelected {
+			switch msg.String() {
+			case "backspace", "delete":
+				m.textarea.SetValue("")
+				m.allSelected = false
+				return m, nil
+			case "left", "right", "up", "down", "home", "end", "pgup", "pgdown":
+				// Cursor movement triggers deselection
+				m.allSelected = false
+			default:
+				// Any other key press (typing) triggers deselection
+				if msg.Code != 0 && unicode.IsPrint(msg.Code) {
+					m.textarea.SetValue("")
+					m.allSelected = false
+				}
+			}
 		}
 		// Handle Enter key
 		if m.textarea.Focused() && key.Matches(msg, m.keyMap.SendMessage) {
 			value := m.textarea.Value()
-			if strings.HasSuffix(value, "\\") {
+			if before, ok := strings.CutSuffix(value, "\\"); ok {
 				// If the last character is a backslash, remove it and add a newline.
-				m.textarea.SetValue(strings.TrimSuffix(value, "\\"))
+				m.textarea.SetValue(before)
 			} else {
 				// Otherwise, send the message
+				m.allSelected = false
 				return m, m.send()
 			}
 		}
@@ -339,7 +374,9 @@ func (m *editorCmp) Update(msg tea.Msg) (util.Model, tea.Cmd) {
 				if strings.HasPrefix(word, "@") {
 					// XXX: wont' work if editing in the middle of the field.
 					m.completionsStartIndex = strings.LastIndex(m.textarea.Value(), word)
-					m.currentQuery = word[1:]
+					// Convert byte index to grapheme index for proper Unicode handling
+					_, graphemeEnd := ansi.ByteToGraphemeRange(word, 1, 1)
+					m.currentQuery = ansi.Cut(word, graphemeEnd, ansi.StringWidth(word))
 					x, y := m.completionsPosition()
 					x -= len(m.currentQuery)
 					m.isCompletionsOpen = true
@@ -525,43 +562,43 @@ func (m *editorCmp) startCompletions() tea.Msg {
 }
 
 // Blur implements Container.
-func (c *editorCmp) Blur() tea.Cmd {
-	c.textarea.Blur()
+func (m *editorCmp) Blur() tea.Cmd {
+	m.textarea.Blur()
 	return nil
 }
 
 // Focus implements Container.
-func (c *editorCmp) Focus() tea.Cmd {
-	return c.textarea.Focus()
+func (m *editorCmp) Focus() tea.Cmd {
+	return m.textarea.Focus()
 }
 
 // IsFocused implements Container.
-func (c *editorCmp) IsFocused() bool {
-	return c.textarea.Focused()
+func (m *editorCmp) IsFocused() bool {
+	return m.textarea.Focused()
 }
 
 // Bindings implements Container.
-func (c *editorCmp) Bindings() []key.Binding {
-	return c.keyMap.KeyBindings()
+func (m *editorCmp) Bindings() []key.Binding {
+	return m.keyMap.KeyBindings()
 }
 
 // TODO: most likely we do not need to have the session here
 // we need to move some functionality to the page level
-func (c *editorCmp) SetSession(session session.Session) tea.Cmd {
-	c.session = session
+func (m *editorCmp) SetSession(session session.Session) tea.Cmd {
+	m.session = session
 	return nil
 }
 
-func (c *editorCmp) IsCompletionsOpen() bool {
-	return c.isCompletionsOpen
+func (m *editorCmp) IsCompletionsOpen() bool {
+	return m.isCompletionsOpen
 }
 
-func (c *editorCmp) HasAttachments() bool {
-	return len(c.attachments) > 0
+func (m *editorCmp) HasAttachments() bool {
+	return len(m.attachments) > 0
 }
 
-func (c *editorCmp) IsEmpty() bool {
-	return strings.TrimSpace(c.textarea.Value()) == ""
+func (m *editorCmp) IsEmpty() bool {
+	return strings.TrimSpace(m.textarea.Value()) == ""
 }
 
 func normalPromptFunc(info textarea.PromptInfo) string {
