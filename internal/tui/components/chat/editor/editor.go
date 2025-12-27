@@ -460,18 +460,56 @@ func (m *editorCmp) View() string {
 	if m.app.Permissions.SkipRequests() {
 		m.textarea.Placeholder = "Yolo mode!"
 	}
+
+	textareaView := m.textarea.View()
+
+	// Apply selection highlighting if all text is selected
+	if m.allSelected && m.textarea.Value() != "" {
+		textareaView = m.applySelectionHighlight(textareaView)
+	}
+
 	if len(m.attachments) == 0 {
 		return t.S().Base.Padding(1).Render(
-			m.textarea.View(),
+			textareaView,
 		)
 	}
 	return t.S().Base.Padding(0, 1, 1, 1).Render(
 		lipgloss.JoinVertical(
 			lipgloss.Top,
 			m.attachmentsContent(),
-			m.textarea.View(),
+			textareaView,
 		),
 	)
+}
+
+// applySelectionHighlight applies the theme's text selection style to the
+// textarea content, highlighting the text after the prompt on each line.
+func (m *editorCmp) applySelectionHighlight(view string) string {
+	t := styles.CurrentTheme()
+	selStyle := t.TextSelection
+
+	lines := strings.Split(view, "\n")
+	result := make([]string, len(lines))
+	promptWidth := 4 // Prompt width as set in SetPromptFunc
+
+	for i, line := range lines {
+		lineWidth := ansi.StringWidth(line)
+		if lineWidth > promptWidth {
+			// Keep the prompt as-is, highlight the text content after it
+			prompt := ansi.Cut(line, 0, promptWidth)
+			textContent := ansi.Cut(line, promptWidth, lineWidth)
+
+			// Strip existing styles and apply selection style
+			textPlain := ansi.Strip(textContent)
+			textHighlighted := selStyle.Render(textPlain)
+
+			result[i] = prompt + textHighlighted
+		} else {
+			result[i] = line
+		}
+	}
+
+	return strings.Join(result, "\n")
 }
 
 func (m *editorCmp) SetSize(width, height int) tea.Cmd {
